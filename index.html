@@ -108,6 +108,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
 .front-card-opt{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1.5px solid #eee;border-radius:8px;cursor:pointer;transition:.12s;user-select:none}
 .front-card-opt:hover{border-color:#378ADD;background:#f5f9ff}
 .front-card-opt.selected{border-color:#378ADD;background:#e8f3ff}
+.front-card-opt .sel-check{width:16px;height:16px;flex-shrink:0;accent-color:#378ADD}
 .front-card-opt img{width:40px;height:56px;object-fit:cover;border-radius:4px;border:1px solid #ddd;flex-shrink:0}
 .front-card-info{flex:1;min-width:0}
 .front-card-name{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#222}
@@ -203,6 +204,8 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
             <option value="7.0|12.0">Tarot Size — 7,0×12,0cm</option>
             <option value="7.0|7.0">Large Square 70 — 7,0×7,0cm</option>
             <option value="8.0|8.0">Large Square 80 — 8,0×8,0cm</option>
+            <option value="8.0|11.8">Gold / Vagantes — 8,0×11,8cm</option>
+            <option value="16.0|9.0">CHEFES — 16,0×9,0cm</option>
           </optgroup>
         </select>
       </div>
@@ -210,6 +213,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
       <div class="row"><label>Altura</label><input type="number" id="inp-ph" value="8.89" min="0.5" max="30" step="0.01"><span class="unit">cm</span></div>
       <div class="row"><label>Gap</label><input type="number" id="inp-gap" value="2" min="0" max="20" step="0.5"><span class="unit">mm</span></div>
       <div class="row"><input type="checkbox" id="chk-orient" checked><label for="chk-orient" style="min-width:auto;cursor:pointer;font-size:12px">Auto-girar pela orientação</label></div>
+      <div class="row"><input type="checkbox" id="chk-mixed"><label for="chk-mixed" style="min-width:auto;cursor:pointer;font-size:12px">Tamanhos mistos por imagem</label></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <div id="fit-badge" class="fit-badge">—</div>
         <div id="pages-badge" class="pages-badge">— folhas</div>
@@ -396,7 +400,8 @@ let cfg = {
   pieceW:6.35, pieceH:8.89, gapMM:2, autoOrient:true,
   autoGrid:true, cols:2, rows:3,
   dpi:300, quality:0.95,
-  duplex:false, defaultBackImg:null
+  duplex:false, defaultBackImg:null,
+  mixedSizes:false
 };
 
 const mm2px = mm => mm * PX_CM / 10;
@@ -509,6 +514,51 @@ function render(){
   renderBackCardsList();
 }
 
+
+/* ── SHELF PACKING para tamanhos mistos ── */
+function shelfLayout(pg, wPx, hPx, bleedPx, gapPx, mirror){
+  const placed=[];
+  const usableW=wPx-bleedPx*2;
+  const usableH=hPx-bleedPx*2;
+  let shelfX=bleedPx, shelfY=bleedPx, shelfH=0;
+
+  pg.forEach((imgObj)=>{
+    if(!imgObj) return;
+    const iw=cm2px(imgObj.wCm||cfg.pieceW);
+    const ih=cm2px(imgObj.hCm||cfg.pieceH);
+    if(shelfX+iw>wPx-bleedPx){
+      /* nova prateleira */
+      shelfX=bleedPx;
+      shelfY+=shelfH+gapPx;
+      shelfH=0;
+    }
+    if(shelfY+ih>hPx-bleedPx) return; /* não cabe */
+    const x = mirror ? (wPx - shelfX - iw) : shelfX;
+    placed.push({imgObj,x,y:shelfY,w:iw,h:ih});
+    shelfX+=iw+gapPx;
+    if(ih>shelfH) shelfH=ih;
+  });
+  return placed;
+}
+
+function addBleedToSheet(inner,wPx,hPx,bleedPx){
+  if(!cfg.showBleed||!cfg.bleedMM) return;
+  const B=bleedPx, arm=Math.max(B*2.5,10), sw=1.2;
+  const corners=[
+    {pts:`M0,${arm} L0,0 L${arm},0`},
+    {pts:`M${wPx-arm},0 L${wPx},0 L${wPx},${arm}`},
+    {pts:`M0,${hPx-arm} L0,${hPx} L${arm},${hPx}`},
+    {pts:`M${wPx-arm},${hPx} L${wPx},${hPx} L${wPx},${hPx-arm}`},
+  ];
+  const d=document.createElement('div');
+  d.className='bleed-corner';
+  d.style.cssText='position:absolute;inset:0;pointer-events:none;z-index:10;';
+  let svgContent=corners.map(({pts})=>`<path d="${pts}" fill="none" stroke="rgba(220,30,30,.75)" stroke-width="${sw}"/>`).join('');
+  svgContent+=`<rect x="${B}" y="${B}" width="${wPx-B*2}" height="${hPx-B*2}" fill="none" stroke="rgba(220,30,30,.2)" stroke-width="0.5" stroke-dasharray="4,3"/>`;
+  d.innerHTML=`<svg width="${wPx}" height="${hPx}" style="position:absolute;top:0;left:0;overflow:visible;" xmlns="http://www.w3.org/2000/svg">${svgContent}</svg>`;
+  inner.appendChild(d);
+}
+
 function buildSheet(pg,cols,rows,pi,wPx,hPx,mirror=false){
   const bleedPx=mm2px(cfg.bleedMM);
   const gapPx=mm2px(cfg.gapMM);
@@ -520,6 +570,38 @@ function buildSheet(pg,cols,rows,pi,wPx,hPx,mirror=false){
   inner.style.height=hPx+'px';
   inner.style.transform=`scale(${zoom})`;
   inner.style.transformOrigin='0 0';
+
+  /* ── tamanhos mistos: layout shelf packing em vez de grid uniforme ── */
+  if(cfg.mixedSizes){
+    const placed=shelfLayout(pg, wPx, hPx, bleedPx, gapPx, mirror);
+    placed.forEach(({imgObj,x,y,w,h},idx)=>{
+      const cell=document.createElement('div');
+      cell.className='cell';
+      cell.style.cssText=`left:${x}px;top:${y}px;width:${w}px;height:${h}px;`;
+      if(imgObj){
+        const im=document.createElement('img');
+        im.src=imgObj.src; im.className='cell-img';
+        cell.appendChild(im);
+        if(cfg.showMarks) addCutMarks(cell,w,h);
+      } else {
+        const emp=document.createElement('div');
+        emp.className='cell-empty';
+        emp.innerHTML=`<span>${(imgObj===undefined?'':'vazio')}</span>`;
+        cell.appendChild(emp);
+      }
+      const ov=document.createElement('div');
+      ov.className='cell-ov';
+      const realIdx=pg.indexOf(imgObj);
+      ov.innerHTML=`<button onclick="cellDup(${pi},${realIdx<0?idx:realIdx},event)">Dup</button><button class="rd" onclick="cellClear(${pi},${realIdx<0?idx:realIdx},event)">Limpar</button>`;
+      cell.appendChild(ov);
+      inner.appendChild(cell);
+    });
+    /* bleed e retorno antecipado */
+
+    /* bleed no modo misto */
+    addBleedToSheet(inner,wPx,hPx,bleedPx);
+    return inner;
+  }
 
   if(cfg.showBleed&&cfg.bleedMM>0){
     const B=bleedPx, arm=Math.max(B*2.5,10), sw=1.2;
@@ -742,7 +824,9 @@ function handleFiles(files){
           src:finalSrc,
           name:file.name,
           natW:rotated?img.naturalHeight:img.naturalWidth,
-          natH:rotated?img.naturalWidth:img.naturalHeight
+          natH:rotated?img.naturalWidth:img.naturalHeight,
+          wCm:cfg.pieceW,   /* tamanho no momento do upload */
+          hCm:cfg.pieceH
         };
         images.push(obj);
         autoInsert(obj);
@@ -896,37 +980,60 @@ function openBackModal(imgObj){
   $('bm-verso-thumb').src=imgObj.src;
   $('bm-verso-name').textContent=imgObj.name;
 
-  /* listar todas as frentes preenchidas */
+  /* listar todas as frentes preenchidas — checkboxes para seleção múltipla */
   const list=$('bm-front-list');
   list.innerHTML='';
   const {cols,rows}=calcGrid();
   let hasAny=false;
+
+  /* cabeçalho "selecionar todos" */
+  const selAllWrap=document.createElement('div');
+  selAllWrap.style.cssText='display:flex;align-items:center;gap:6px;padding:4px 6px;margin-bottom:4px';
+  const selAllCb=document.createElement('input');
+  selAllCb.type='checkbox'; selAllCb.className='sel-check';
+  selAllCb.id='bm-sel-all';
+  const selAllLbl=document.createElement('label');
+  selAllLbl.htmlFor='bm-sel-all';
+  selAllLbl.style.cssText='font-size:11px;color:#555;cursor:pointer;font-weight:600';
+  selAllLbl.textContent='Selecionar todas as frentes';
+  selAllCb.addEventListener('change',()=>{
+    list.querySelectorAll('input.sel-check').forEach(cb=>{cb.checked=selAllCb.checked;cb.closest('.front-card-opt').classList.toggle('selected',selAllCb.checked);});
+  });
+  selAllWrap.appendChild(selAllCb); selAllWrap.appendChild(selAllLbl);
+  list.appendChild(selAllWrap);
 
   pages.forEach((pg,pi)=>{
     pg.forEach((frontImg,ci)=>{
       if(!frontImg)return;
       hasAny=true;
       const row=Math.floor(ci/cols)+1, col=ci%cols+1;
-      const mirrorIdx=mirrorCellIdx(ci,cols);
-
-      /* checar se já tem verso nessa posição */
       const occupied = backCards.find(bc=>bc.pageIdx===pi&&bc.cellIdx===ci);
 
       const opt=document.createElement('div');
-      opt.className='front-card-opt'+(occupied?' ' :'');
-      opt.dataset.pi=pi; opt.dataset.ci=ci; opt.dataset.mi=mirrorIdx;
-      opt.dataset.fsrc=frontImg.src;
-      opt.style.opacity=occupied?'.5':'1';
-      opt.innerHTML=`
-        <img src="${frontImg.src}">
-        <div class="front-card-info">
-          <div class="front-card-name">${frontImg.name}</div>
-          <div class="front-card-sub">Linha ${row} · Coluna ${col} · Folha ${pi+1}</div>
-          <div class="front-card-pos">${occupied?'⚠ já tem verso — substituirá':'Posição livre'}</div>
-        </div>`;
-      opt.addEventListener('click',()=>{
-        list.querySelectorAll('.front-card-opt').forEach(o=>o.classList.remove('selected'));
-        opt.classList.add('selected');
+      opt.className='front-card-opt';
+      opt.dataset.pi=pi; opt.dataset.ci=ci;
+      opt.style.opacity=occupied?'.7':'1';
+
+      const cb=document.createElement('input');
+      cb.type='checkbox'; cb.className='sel-check';
+      cb.addEventListener('change',()=>opt.classList.toggle('selected',cb.checked));
+      opt.appendChild(cb);
+
+      const imgEl=document.createElement('img');
+      imgEl.src=frontImg.src; opt.appendChild(imgEl);
+
+      const info=document.createElement('div');
+      info.className='front-card-info';
+      info.innerHTML=`<div class="front-card-name">${frontImg.name}</div>
+        <div class="front-card-sub">Linha ${row} · Col ${col} · Folha ${pi+1}</div>
+        <div class="front-card-pos" style="color:${occupied?'#e07000':'#378ADD'}">${occupied?'⚠ substituirá verso atual':'Livre'}</div>`;
+      opt.appendChild(info);
+
+      /* clicar na linha (fora do checkbox) também marca */
+      opt.addEventListener('click',e=>{
+        if(e.target===cb)return;
+        cb.checked=!cb.checked;
+        opt.classList.toggle('selected',cb.checked);
       });
       list.appendChild(opt);
     });
@@ -941,22 +1048,15 @@ function openBackModal(imgObj){
 
 function confirmBackModal(replicate=false){
   const list=$('bm-front-list');
-  const sel=list.querySelector('.front-card-opt.selected');
-  if(!sel){toast('Selecione uma carta de frente');return;}
-
-  const pi=parseInt(sel.dataset.pi);
-  const ci=parseInt(sel.dataset.ci);
-  const frontImg=pages[pi][ci];
 
   if(replicate){
-    /* aplicar verso em TODAS as células preenchidas de todas as páginas */
+    /* replicar em TODAS as células preenchidas */
     let count=0;
     pages.forEach((pg,pii)=>{
       while(backPages.length<=pii) backPages.push(new Array(cap()).fill(null));
       while(backPages[pii].length<cap()) backPages[pii].push(null);
       pg.forEach((fi,cii)=>{
         if(!fi)return;
-        /* remover entrada anterior se existia */
         const prev=backCards.findIndex(bc=>bc.pageIdx===pii&&bc.cellIdx===cii);
         if(prev>=0) backCards.splice(prev,1);
         backPages[pii][cii]=_pendingBackObj;
@@ -966,39 +1066,33 @@ function confirmBackModal(replicate=false){
     });
     $('back-modal-overlay').classList.remove('show');
     _pendingBackObj=null;
-    renderBackCardsList();
-    updateDuplexInfo();
-    render();
+    renderBackCardsList(); updateDuplexInfo(); render();
     toast(`Verso replicado em ${count} carta${count>1?'s':''} ✓`);
-    _pendingBackIdx++;
-    processNextBackFile();
+    _pendingBackIdx++; processNextBackFile();
     return;
   }
 
-  /* posição única */
-  /* garantir que a página de verso existe */
-  while(backPages.length<=pi) backPages.push(new Array(cap()).fill(null));
-  while(backPages[pi].length<cap()) backPages[pi].push(null);
+  /* seleção múltipla por checkboxes */
+  const selected=[...list.querySelectorAll('.front-card-opt.selected')];
+  if(!selected.length){toast('Selecione ao menos uma carta de frente');return;}
 
-  /* remover verso anterior na mesma posição se existia */
-  const prev=backCards.findIndex(bc=>bc.pageIdx===pi&&bc.cellIdx===ci);
-  if(prev>=0) backCards.splice(prev,1);
-
-  /* salvar verso no mesmo índice da frente — buildSheet mirror reposiciona a coluna */
-  backPages[pi][ci]=_pendingBackObj;
-  backCards.push({backImg:_pendingBackObj,frontImg,pageIdx:pi,cellIdx:ci,mirrorIdx:ci});
+  selected.forEach(sel=>{
+    const pi=parseInt(sel.dataset.pi);
+    const ci=parseInt(sel.dataset.ci);
+    const frontImg=pages[pi][ci];
+    while(backPages.length<=pi) backPages.push(new Array(cap()).fill(null));
+    while(backPages[pi].length<cap()) backPages[pi].push(null);
+    const prev=backCards.findIndex(bc=>bc.pageIdx===pi&&bc.cellIdx===ci);
+    if(prev>=0) backCards.splice(prev,1);
+    backPages[pi][ci]=_pendingBackObj;
+    backCards.push({backImg:_pendingBackObj,frontImg,pageIdx:pi,cellIdx:ci,mirrorIdx:ci});
+  });
 
   $('back-modal-overlay').classList.remove('show');
   _pendingBackObj=null;
-
-  renderBackCardsList();
-  updateDuplexInfo();
-  render();
-  toast('Verso posicionado ✓');
-
-  /* processar próximo da fila */
-  _pendingBackIdx++;
-  processNextBackFile();
+  renderBackCardsList(); updateDuplexInfo(); render();
+  toast(`Verso vinculado a ${selected.length} carta${selected.length>1?'s':''} ✓`);
+  _pendingBackIdx++; processNextBackFile();
 }
 
 function cancelBackModal(){
@@ -1074,6 +1168,7 @@ function bindControls(){
   });
   $('chk-bleed').addEventListener('change',e=>{cfg.showBleed=e.target.checked;render();});
   $('chk-orient').addEventListener('change',e=>{cfg.autoOrient=e.target.checked;});
+  $('chk-mixed').addEventListener('change',e=>{cfg.mixedSizes=e.target.checked;render();});
   $('sel-preset').addEventListener('change',e=>{
     const v=e.target.value;
     if(!v)return;
@@ -1383,7 +1478,7 @@ if(cfg.duplex) setupBackDropzone();
     <div id="back-modal-foot">
       <button onclick="cancelBackModal()">Cancelar</button>
       <button onclick="confirmBackModal(true)" style="background:#fef3e2;color:#7a4e00;border-color:#f0c070;font-weight:600">Replicar em todos</button>
-      <button class="confirm-btn" onclick="confirmBackModal(false)">Posicionar aqui</button>
+      <button class="confirm-btn" onclick="confirmBackModal(false)">Vincular selecionadas</button>
     </div>
   </div>
 </div>
